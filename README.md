@@ -1,6 +1,10 @@
-# Vaillant 7-8-9 WLAN-Thermostat (ESPHome / Home Assistant)
+# Vaillant 7-8-9 Smart-Home-Thermostat für Home Assistant (ESPHome)
 
-Ein selbst gebautes Wandthermostat für **Vaillant-Gasthermen ohne eBUS**. Es
+**Smart Home für alte Vaillant-Thermen:** Ein selbst gebautes WLAN-Wandthermostat
+für **Vaillant-Gasthermen ohne eBUS**. Die Heizung erscheint in **Home Assistant**
+als ganz normales Thermostat, mit Raumtemperatur, Zeitplänen, Automationen,
+App-Steuerung und Sprachassistent. Vor Ort gibt es ein E-Paper-Display und einen
+Drehknopf. Das Thermostat
 ersetzt den alten Raumregler (hier einen **calorMATIC 332**) an seinem Platz an
 der Wand. Die Therme wird stufenlos über die analoge **7-8-9-Schnittstelle**
 gesteuert, eingebunden ist alles per **ESPHome in Home Assistant**.
