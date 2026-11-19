@@ -1,0 +1,548 @@
+# =====================================================================
+#  Vaillant 7-8-9 Wandthermostat  (ESP32-C3 + E-Paper + ESPHome)
+#  Therme: Vaillant atmoTEC VCW 194/3-C-HL  (ersetzt calorMATIC 332)
+#  Sitzt am Platz des calorMATIC, versorgt sich aus Klemme 8/9.
+#  Gemessen: Kl.8-9 = 23,6 V | Kl.7 offen = 22 V | 17,8 V -> 82 °C Vorlauf
+#            keine Anforderung = 10,1 V
+#
+#  Prinzip: ESP32-C3 -> PWM -> Optokoppler -> RC-Tiefpass -> OPV (x2,2)
+#           -> Diode -> Klemme 7 (zieht Klemme 7 auf die Sollspannung).
+#           Die Therme nimmt immer das Minimum aus Klemme 7 und ihrem
+#           Drehknopf -> Drehknopf = harte Obergrenze.
+#  Ausfallsicher: ESP aus -> Optokoppler aus -> Therme heizt nach Drehknopf.
+#
+#  Pinbelegung ESP32-C3 SuperMini:
+#    GPIO3  PWM -> Optokoppler          GPIO8/9  I2C SDA/SCL (SHT31-D)
+#    GPIO4  E-Paper CLK                  GPIO21   Drehgeber A
+#    GPIO6  E-Paper DIN (MOSI)           GPIO20   Drehgeber B
+#    GPIO7  E-Paper CS                   GPIO0    Drehgeber Taster
+#    GPIO5  E-Paper DC                   GPIO10   E-Paper RST
+#    GPIO1  E-Paper BUSY
+# =====================================================================
+
+substitutions:
+  name: vaillant-789
+  friendly_name: Vaillant Thermostat
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  on_boot:
+    priority: -100
+    then:
+      - script.execute: apply_output
+      - delay: 5s
+      - component.update: epd
+
+esp32:
+  board: esp32-c3-devkitm-1
+  framework:
+    type: esp-idf
+
+logger:
+  hardware_uart: USB_SERIAL_JTAG
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  power_save_mode: light        # spart Strom an Klemme 8
+  ap:
+    ssid: "Vaillant-789 Fallback"
+
+captive_portal:
+
+# ---------------------------------------------------------------------
+#  Busse
+# ---------------------------------------------------------------------
+i2c:
+  sda: GPIO8
+  scl: GPIO9
+  frequency: 100kHz
+
+spi:
+  clk_pin: GPIO4
+  mosi_pin: GPIO6
+
+# ---------------------------------------------------------------------
+#  Ausgang an die Therme
+# ---------------------------------------------------------------------
+output:
+  # PWM an den Optokoppler. inverted: true, weil der Optokoppler das
+  # Signal umdreht -> Pegel 1.0 = hohe Spannung an Klemme 7.
+  - platform: ledc
+    id: pwm_789
+    pin: GPIO3
+    frequency: 500 Hz
+    inverted: true
+
+  # Stellgroesse des PID-Reglers (0..1)
+  - platform: template
+    id: pid_output
+    type: float
+    write_action:
+      - lambda: id(pid_demand) = state;
+      - script.execute: apply_output
+
+globals:
+  - id: pid_demand
+    type: float
+    initial_value: '0.0'
+
+# ---------------------------------------------------------------------
+#  Sensoren
+# ---------------------------------------------------------------------
+sensor:
+  - platform: sht3xd              # Adafruit SHT31-D (Reichelt DEBO TEMP HUM)
+    address: 0x44
+    update_interval: 30s
+    temperature:
+      id: raumtemp
+      name: "Raumtemperatur"
+      filters:
+        - lambda: return x + id(temp_offset).state;   # Eigenerwaermung ausgleichen
+        - sliding_window_moving_average:
+            window_size: 4
+            send_every: 1
+    humidity:
+      name: "Luftfeuchtigkeit"
+
+  - platform: rotary_encoder
+    id: drehgeber
+    internal: true
+    # ALPS STEC11B01: 15 Impulse / 30 Rastungen -> 2 = ein Schritt pro Raste.
+    # Zaehlt er nur jede zweite Raste: 4; zaehlt er doppelt: 1.
+    resolution: 2
+    pin_a:
+      number: GPIO21
+      mode: INPUT_PULLUP
+    pin_b:
+      number: GPIO20
+      mode: INPUT_PULLUP
+    on_clockwise:
+      - lambda: |-
+          auto call = id(heizung).make_call();
+          call.set_target_temperature(std::min(25.0f, id(heizung).target_temperature + 0.5f));
+          call.perform();
+      - script.execute: disp_refresh
+    on_anticlockwise:
+      - lambda: |-
+          auto call = id(heizung).make_call();
+          call.set_target_temperature(std::max(10.0f, id(heizung).target_temperature - 0.5f));
+          call.perform();
+      - script.execute: disp_refresh
+
+  - platform: template
+    id: s_vorlauf
+    name: "Vorlauf-Soll aktiv"
+    unit_of_measurement: "°C"
+    device_class: temperature
+    accuracy_decimals: 0
+    update_interval: never
+
+  - platform: template
+    id: s_spannung
+    name: "Steuerspannung Klemme 7 (Soll)"
+    unit_of_measurement: "V"
+    device_class: voltage
+    accuracy_decimals: 2
+    update_interval: never
+
+  - platform: template
+    id: s_pegel
+    name: "PWM-Pegel"
+    unit_of_measurement: "%"
+    accuracy_decimals: 1
+    entity_category: diagnostic
+    update_interval: never
+
+  - platform: template
+    id: s_waermebedarf
+    name: "Wärmebedarf (PID)"
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    update_interval: never
+
+  - platform: wifi_signal
+    name: "WLAN-Signal"
+    update_interval: 120s
+
+binary_sensor:
+  - platform: gpio
+    id: drehgeber_taste
+    internal: true
+    pin:
+      number: GPIO0
+      mode: INPUT_PULLUP
+      inverted: true
+    on_click:
+      min_length: 50ms
+      max_length: 1s
+      then:
+        # Kurz druecken: Heizung Ein/Aus
+        - lambda: |-
+            auto call = id(heizung).make_call();
+            call.set_mode(id(heizung).mode == climate::CLIMATE_MODE_OFF
+                          ? climate::CLIMATE_MODE_HEAT : climate::CLIMATE_MODE_OFF);
+            call.perform();
+        - script.execute: disp_refresh
+
+  - platform: template
+    id: s_notbetrieb
+    name: "Notbetrieb aktiv"
+    device_class: problem
+
+  - platform: status
+    name: "Status"
+
+# ---------------------------------------------------------------------
+#  Raumregelung (PID) - in HA ein normales Thermostat
+# ---------------------------------------------------------------------
+climate:
+  - platform: pid
+    id: heizung
+    name: "Heizung"
+    sensor: raumtemp
+    default_target_temperature: 20°C
+    heat_output: pid_output
+    visual:
+      min_temperature: 10
+      max_temperature: 25
+      temperature_step: 0.5
+    control_parameters:
+      kp: 0.3
+      ki: 0.0005
+      kd: 0.0
+      output_averaging_samples: 5
+    on_state:
+      - script.execute: disp_refresh
+
+# ---------------------------------------------------------------------
+#  Bedienung und Kalibrierung
+# ---------------------------------------------------------------------
+select:
+  - platform: template
+    id: betriebsart
+    name: "Betriebsart"
+    options:
+      - "Aus"                          # 0
+      - "Raumregelung"                 # 1
+      - "Vorlauf manuell"              # 2
+      - "Pegel manuell (Kalibrierung)" # 3
+    initial_option: "Aus"
+    optimistic: true
+    restore_value: true
+    on_value:
+      - script.execute: apply_output
+      - script.execute: disp_refresh
+
+number:
+  - platform: template
+    id: vorlauf_manuell
+    name: "Vorlauf-Soll manuell"
+    unit_of_measurement: "°C"
+    min_value: 20
+    max_value: 80
+    step: 1
+    initial_value: 45
+    optimistic: true
+    restore_value: true
+    on_value: [script.execute: apply_output]
+
+  - platform: template
+    id: vorlauf_min
+    name: "Raumregelung Vorlauf min"
+    unit_of_measurement: "°C"
+    min_value: 20
+    max_value: 60
+    step: 1
+    initial_value: 35
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    on_value: [script.execute: apply_output]
+
+  - platform: template
+    id: vorlauf_max
+    name: "Raumregelung Vorlauf max"
+    unit_of_measurement: "°C"
+    min_value: 30
+    max_value: 80
+    step: 1
+    initial_value: 65
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    on_value: [script.execute: apply_output]
+
+  - platform: template
+    id: vorlauf_notbetrieb
+    name: "Notbetrieb Vorlauf"
+    unit_of_measurement: "°C"
+    min_value: 20
+    max_value: 70
+    step: 1
+    initial_value: 45
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    on_value: [script.execute: apply_output]
+
+  - platform: template
+    id: temp_offset
+    name: "Kalibrierung: Temperatur-Offset"
+    unit_of_measurement: "°C"
+    min_value: -5
+    max_value: 5
+    step: 0.1
+    initial_value: 0
+    optimistic: true
+    restore_value: true
+    entity_category: config
+
+  - platform: template
+    id: pegel_manuell
+    name: "Kalibrierung: PWM-Pegel manuell"
+    unit_of_measurement: "%"
+    min_value: 0
+    max_value: 100
+    step: 0.5
+    initial_value: 40
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    on_value: [script.execute: apply_output]
+
+  - platform: template
+    id: cal_u50
+    name: "Kalibrierung: Spannung bei Pegel 50 %"
+    unit_of_measurement: "V"
+    min_value: 0
+    max_value: 25
+    step: 0.01
+    initial_value: 10.5    # Rechenwert, MESSEN!
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    on_value: [script.execute: apply_output]
+
+  - platform: template
+    id: cal_u85
+    name: "Kalibrierung: Spannung bei Pegel 85 %"
+    unit_of_measurement: "V"
+    min_value: 0
+    max_value: 25
+    step: 0.01
+    initial_value: 17.4    # Rechenwert, MESSEN!
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    on_value: [script.execute: apply_output]
+
+  - platform: template
+    id: cal_v_aus
+    name: "Kalibrierung: Spannung Heizung aus"
+    unit_of_measurement: "V"
+    min_value: 0
+    max_value: 25
+    step: 0.1
+    initial_value: 9.6     # gemessen 10,1 V aus -> minus 0,5 V
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    on_value: [script.execute: apply_output]
+
+  - platform: template
+    id: cal_t_lo
+    name: "Kalibrierung: Vorlauf unterer Punkt"
+    unit_of_measurement: "°C"
+    min_value: 20
+    max_value: 60
+    step: 1
+    initial_value: 35
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    on_value: [script.execute: apply_output]
+
+  - platform: template
+    id: cal_v_lo
+    name: "Kalibrierung: Spannung unterer Punkt"
+    unit_of_measurement: "V"
+    min_value: 0
+    max_value: 25
+    step: 0.05
+    initial_value: 11.5    # Schaetzwert, MESSEN!
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    on_value: [script.execute: apply_output]
+
+  - platform: template
+    id: cal_t_hi
+    name: "Kalibrierung: Vorlauf oberer Punkt"
+    unit_of_measurement: "°C"
+    min_value: 40
+    max_value: 90
+    step: 1
+    initial_value: 82      # gemessen: 82 °C bei 17,8 V (Drehknopf voll auf)
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    on_value: [script.execute: apply_output]
+
+  - platform: template
+    id: cal_v_hi
+    name: "Kalibrierung: Spannung oberer Punkt"
+    unit_of_measurement: "V"
+    min_value: 0
+    max_value: 25
+    step: 0.05
+    initial_value: 17.8    # gemessen: 17,8 V -> 82 °C
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    on_value: [script.execute: apply_output]
+
+# ---------------------------------------------------------------------
+#  E-Paper 2,9" (Waveshare V2, 296 x 128)
+# ---------------------------------------------------------------------
+font:
+  - file: "gfonts://Roboto@700"
+    id: f_big
+    size: 46
+  - file: "gfonts://Roboto"
+    id: f_mid
+    size: 20
+  - file: "gfonts://Roboto"
+    id: f_small
+    size: 14
+
+display:
+  - platform: waveshare_epaper
+    id: epd
+    cs_pin: GPIO7
+    dc_pin: GPIO5
+    reset_pin: GPIO10
+    busy_pin: GPIO1
+    model: 2.90inv2            # Waveshare 2.9" V2; bei Bildfehlern 2.90inv2-r2 probieren
+    rotation: 270
+    full_update_every: 30      # alle 30 Teil-Updates einmal komplett (gegen Geisterbilder)
+    update_interval: never     # aktualisiert per Skript / Intervall
+    lambda: |-
+      it.fill(COLOR_OFF);
+      // --- links: Raumtemperatur gross, darunter Soll ---
+      float ist = id(raumtemp).state;
+      if (isnan(ist)) it.print(6, 4, id(f_big), "--.-°");
+      else it.printf(6, 4, id(f_big), "%.1f°", ist);
+      if (id(heizung).mode == climate::CLIMATE_MODE_OFF)
+        it.print(8, 66, id(f_mid), "Heizung aus");
+      else
+        it.printf(8, 66, id(f_mid), "Soll %.1f°", id(heizung).target_temperature);
+
+      // --- rechts: Vorlauf und Status ---
+      it.line(188, 6, 188, 98);
+      it.print(198, 6, id(f_small), "Vorlauf");
+      float vl = id(s_vorlauf).state;
+      if (isnan(vl)) it.print(198, 24, id(f_mid), "--");
+      else it.printf(198, 24, id(f_mid), "%.0f°C", vl);
+      it.print(198, 56, id(f_small), "Bedarf");
+      it.printf(198, 74, id(f_mid), "%.0f%%", id(pid_demand) * 100.0f);
+
+      // --- unten: Statuszeile ---
+      it.line(0, 104, 296, 104);
+      int m = 0;
+      auto idx = id(betriebsart).active_index();
+      if (idx.has_value()) m = (int) *idx;
+      const char *status;
+      if (id(s_notbetrieb).state)       status = "NOTBETRIEB";
+      else if (m == 0)                  status = "Betrieb: Aus";
+      else if (m == 2)                  status = "Vorlauf manuell";
+      else if (m == 3)                  status = "Kalibrierung";
+      else if (!isnan(vl))              status = "Heizt";
+      else                              status = "Bereit";
+      it.print(6, 108, id(f_small), status);
+      bool online = wifi::global_wifi_component->is_connected();
+      it.print(290, 108, id(f_small), TextAlign::TOP_RIGHT, online ? "WLAN" : "offline");
+
+# ---------------------------------------------------------------------
+#  Logik
+# ---------------------------------------------------------------------
+interval:
+  - interval: 10s
+    then:
+      - script.execute: apply_output
+  - interval: 60s
+    then:
+      - component.update: epd
+
+script:
+  # Display 2 s nach der letzten Bedienung neu zeichnen (schont das E-Paper)
+  - id: disp_refresh
+    mode: restart
+    then:
+      - delay: 2s
+      - component.update: epd
+
+  - id: apply_output
+    mode: restart
+    then:
+      - lambda: |-
+          int m = 0;
+          auto idx = id(betriebsart).active_index();
+          if (idx.has_value()) m = (int) *idx;
+
+          float flow  = NAN;   // NAN = Heizung aus
+          float volt  = NAN;
+          float level = 0.0f;
+          bool fallback = false;
+
+          if (m == 3) {
+            // Kalibrierung: PWM-Pegel direkt vorgeben
+            level = id(pegel_manuell).state / 100.0f;
+          } else {
+            if (m == 1) {
+              // Raumregelung; Notbetrieb nur, wenn der eigene Sensor ausfaellt
+              if (isnan(id(raumtemp).state)) {
+                fallback = true;
+                flow = id(vorlauf_notbetrieb).state;
+              } else if (id(heizung).mode != climate::CLIMATE_MODE_OFF &&
+                         id(pid_demand) > 0.02f) {
+                float tmin = id(vorlauf_min).state;
+                float tmax = id(vorlauf_max).state;
+                flow = tmin + id(pid_demand) * (tmax - tmin);
+              }
+            } else if (m == 2) {
+              flow = id(vorlauf_manuell).state;
+            }
+
+            // Vorlauftemperatur -> Spannung an Klemme 7
+            if (isnan(flow)) {
+              volt = id(cal_v_aus).state;
+            } else {
+              float tlo = id(cal_t_lo).state, thi = id(cal_t_hi).state;
+              float vlo = id(cal_v_lo).state, vhi = id(cal_v_hi).state;
+              float f = std::max(tlo, std::min(thi, flow));
+              volt = (thi > tlo) ? vlo + (f - tlo) * (vhi - vlo) / (thi - tlo) : vlo;
+            }
+
+            // Spannung -> PWM-Pegel (lineare Kalibrierung bei 50 % / 85 %)
+            float u50 = id(cal_u50).state, u85 = id(cal_u85).state;
+            level = (u85 > u50) ? 0.50f + (volt - u50) * 0.35f / (u85 - u50) : 0.0f;
+          }
+
+          level = std::max(0.0f, std::min(1.0f, level));
+          id(pwm_789).set_level(level);
+
+          id(s_vorlauf).publish_state(flow);
+          id(s_spannung).publish_state(volt);
+          id(s_pegel).publish_state(level * 100.0f);
+          id(s_waermebedarf).publish_state(id(pid_demand) * 100.0f);
+          id(s_notbetrieb).publish_state(fallback);

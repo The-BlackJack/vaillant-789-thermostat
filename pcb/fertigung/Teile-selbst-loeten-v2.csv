@@ -1,0 +1,7 @@
+Bauteil,Wert,Teil
+J1,Klemme 9-8-7,"Phoenix MKDS 1,5/3-5,08 (oder kompatibel)"
+U4,TSR 0.5-2450,TRACO TSR 0.5-2450
+A1,ESP32-C3 SuperMini,"ESP32-C3 SuperMini + 2x Buchsenleiste 1x8 RM2,54"
+J2,E-Paper,"Stiftleiste 1x9 gewinkelt RM 2,54 (Pin 9 = PWR neuerer Waveshare-Module)"
+J3,SHT-Sensor,"Stiftleiste 1x4 gewinkelt RM 2,54"
+J4,Drehgeber EC11,"Stiftleiste 1x5 gewinkelt RM 2,54"

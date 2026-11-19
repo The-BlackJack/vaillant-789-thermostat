@@ -1,0 +1,16 @@
+# Persoenliche Notizen / Zugangsdaten
+CLAUDE.md
+secrets.yaml
+
+# KiCad lokale Dateien
+*.kicad_prl
+fp-info-cache
+*-backups/
+_autosave-*
+*.lck
+
+# Python
+__pycache__/
+
+# veraltete Datei
+pcb/fertigung/Teile-selbst-loeten.csv
