@@ -132,8 +132,15 @@ Datei: [vaillant-789.yaml](vaillant-789.yaml) (ESPHome, ESP-IDF)
 - **Notbetrieb:** Fällt der Raumsensor aus, wird eine feste Vorlauftemperatur gefahren.
 - **E-Paper-Anzeige:**
   - Raumtemperatur und Soll-Wert
-  - Vorlauf-Soll und Wärmebedarf
+  - Vorlauf-Soll und Wärmebedarf (bei „Vorlauf manuell“ und Kalibrierung
+    stattdessen der tatsächliche PWM-Pegel)
   - Status und WLAN
+
+  ![Display-Simulation](display-sim.png)
+
+  Simulation der Anzeige in sechs Zuständen, erzeugt mit
+  [tools/display_sim.py](tools/display_sim.py) (gleiche Koordinaten und
+  Schriften wie in der YAML, prüft Überstände).
 - **Drehgeber:**
   - Drehen: Soll-Temperatur in 0,5-°C-Schritten
   - Drücken: Heizung ein/aus
@@ -241,6 +248,8 @@ secrets.example.yaml          Vorlage für die Zugangsdaten
 vaillant-789-gehaeuse.scad    Gehäuse (OpenSCAD)
 druck/                        STL-Dateien und Ansichten
 gehaeuse-massbild.png         Maßbild Gehäuse
+display-sim.png               Simulation der E-Paper-Anzeige
+tools/display_sim.py          erzeugt display-sim.png aus dem Display-Code
 pcb-tht/                      Variante A: KiCad-Projekt THT, Gerber, Renders, Generator-Skripte
 pcb/                          Variante B: KiCad-Projekt SMD (JLCPCB-Bestückung), BOM/CPL
 lochraster/                   Variante C: Lochraster-Layout, Verdrahtungsliste, Einkaufsliste

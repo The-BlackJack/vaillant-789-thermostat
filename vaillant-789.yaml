@@ -453,14 +453,22 @@ display:
       float vl = id(s_vorlauf).state;
       if (isnan(vl)) it.print(198, 24, id(f_mid), "--");
       else it.printf(198, 24, id(f_mid), "%.0f°C", vl);
-      it.print(198, 56, id(f_small), "Bedarf");
-      it.printf(198, 74, id(f_mid), "%.0f%%", id(pid_demand) * 100.0f);
-
-      // --- unten: Statuszeile ---
-      it.line(0, 104, 296, 104);
       int m = 0;
       auto idx = id(betriebsart).active_index();
       if (idx.has_value()) m = (int) *idx;
+      if (m >= 2) {
+        // manuell / Kalibrierung: tatsaechlicher Ausgangspegel statt PID-Bedarf
+        it.print(198, 56, id(f_small), "Pegel");
+        float pg = id(s_pegel).state;
+        if (isnan(pg)) it.print(198, 74, id(f_mid), "--");
+        else it.printf(198, 74, id(f_mid), "%.0f%%", pg);
+      } else {
+        it.print(198, 56, id(f_small), "Bedarf");
+        it.printf(198, 74, id(f_mid), "%.0f%%", id(pid_demand) * 100.0f);
+      }
+
+      // --- unten: Statuszeile ---
+      it.line(0, 104, 296, 104);
       const char *status;
       if (id(s_notbetrieb).state)       status = "NOTBETRIEB";
       else if (m == 0)                  status = "Betrieb: Aus";
