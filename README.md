@@ -261,9 +261,13 @@ Einkaufsliste.md              Bestellliste für Variante B
 - **ESP-Reihenabstand:** Den Abstand der beiden Pinreihen des ESP32-C3
   SuperMini (15,24 mm angenommen) am eigenen Modul nachmessen. Es gibt Klone mit
   abweichendem Abstand.
-- **Firmware:** Die YAML ist noch nicht kompiliert worden. Mögliche
-  Stolperstellen sind `model: 2.90inv2` vs. `2.90inv2-r2` beim Display und
-  `resolution` beim Drehgeber.
+- **Firmware:** Kompiliert mit ESPHome 2026.11.0 und auf einem ESP32-C3
+  SuperMini getestet (WLAN, Home-Assistant-API). Display, Sensor und Drehgeber
+  sind noch nicht angeschlossen; offen sind `model: 2.90inv2` vs.
+  `2.90inv2-r2` beim Display und `resolution` beim Drehgeber.
+- **WLAN beim SuperMini:** Viele Module verbinden sich bei voller
+  Sendeleistung nicht („Auth Expired“). Die YAML setzt deshalb
+  `output_power: 8.5dB`.
 - **Kalibrierung:** Der untere Kennlinienpunkt (ca. 35 °C) muss am fertigen
   Gerät bestimmt werden.
 - **Display-Höhe:** Den Abstand zwischen Display-Rückseite und dem höchsten
