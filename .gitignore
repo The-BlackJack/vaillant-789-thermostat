@@ -14,3 +14,7 @@ __pycache__/
 
 # veraltete Datei
 pcb/fertigung/Teile-selbst-loeten.csv
+
+# ESPHome Build-Verzeichnis
+.esphome/
+.esphome-flash.log
